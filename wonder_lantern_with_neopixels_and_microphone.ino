@@ -36,27 +36,33 @@ This paragraph must be included in any redistribution.
 #define NOISE      9  // Noise/hum/interference in mic signal
 #define SAMPLES   40  // Length of buffer for dynamic level adjustment
 
+// Twinkle settings 
+float   fadeMillis       =  1000; // duration of twinkle fade
+int     fadeLockMillis   =   500; // withing this amount of millis, started twinkles will not be overwritten by new twinkles
+int     twinkleRate      = 60000; // random twinkle will happen once every this many millis (when in twinkle_while_idle mode), so higher values yield twinkles LESS often
+boolean twinkleWhileIdle = false; // true: twinkle_while_idle mode is always on. false: mode depends on mic input during boot cycle
+int     twinkleWhileIdleBootThresholdLevel = 150;  // when the average microphone reading during the boot cycle is above this value, twinkle_while_idle mode is turned on
+
+
+// init variables
 byte peak      = 0;   // Used for falling dot
 byte dotCount  = 0;   // Frame counter for delaying dot-falling speed
 byte volCount  = 0;   // Frame counter for storing past volume data
-int vol[SAMPLES];     // Collection of prior volume samples, used to take averages
-int lvl       = 10;   // Current "dampened" audio level
-int minLvlAvg = 0;    // For dynamic adjustment of graph low & high
-int maxLvlAvg = 512;
-Adafruit_NeoPixel strip = Adafruit_NeoPixel(N_PIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
+int  vol[SAMPLES];    // Collection of prior volume samples, used to take averages
+int  lvl       = 10;  // Current "dampened" audio level
+int  minLvlAvg = 0;   // For dynamic adjustment of graph low & high
+int  maxLvlAvg = 512;
 
-// Setup neo pixel twinkles
-float fadeMillis = 3000;      // duration of twinkle fade
-int   fadeLockMillis = 2000;  // don't overwrite a fading led whitin this amount of milis after is was lit. This preserves the twinkle effect even when there is continuous noise.
-float redStates[N_PIXELS];    // these arrays keep track of the color value of each neopixel
-float blueStates[N_PIXELS];   //
-float greenStates[N_PIXELS];  //
-long  timestamps[N_PIXELS];   // this array keeps track of the twinkle fading period of each neo pixel
+// init pixels
+Adafruit_NeoPixel pixels = Adafruit_NeoPixel(N_PIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
+float redStates[N_PIXELS];      // these arrays keep track of the color value of each neopixel, while fading
+float blueStates[N_PIXELS];     //
+float greenStates[N_PIXELS];    //
+float redOriginal[N_PIXELS];    // these arrays keep track of the original color each neopixel, before fading
+float blueOriginal[N_PIXELS];   //
+float greenOriginal[N_PIXELS];  //
+unsigned long timestamps[N_PIXELS]; // this array keeps track of the start time of a twinkle fade for each pixel
 
-// twinkle on idle mode
-int twinkleWhileIdleBootThresholdLevel = 150;  // when the average microphone reading during the boot cycle is above this value, twinkle_while_idle mode is turned on
-int twinkleRate = 400;                         // higher values yield more twinkles
-boolean twinkleWhileIdle = false;              // set to true when twinkle_while_idle mode should ALWAYS be on, regarless of the boot cycle microphone input
 
 void setup() {
   Serial.begin(9600);
@@ -67,28 +73,26 @@ void setup() {
   // analogReference(EXTERNAL);
 
   memset(vol, 0, sizeof(vol));
-  strip.begin();
+  memset(timestamps, 0, sizeof(timestamps));
+  pixels.begin();
 
   // boot delay loop
   // if the avegate sound level during this loop is high, 
   // the 'twinkle_while_idle' mode is turned on.
   // So, to turn on this mode, you should generate noise 
   // during boot, by tapping the microphone for example.
-  int total = 0;
-  int bootcycles = 200;
-  for(int bootcycle = 0; bootcycle < bootcycles; bootcycle++){
-     total += getMicReading();
-     delay(10);
+  int average = 0;
+  long bootEnd = millis() + 2000;
+  int bootCycle = 0;
+  while( millis() < bootEnd ){
+     average = ((average * bootCycle) + getMicReading() ) / ++bootCycle ;
   }
-  twinkleWhileIdle = (total/bootcycles > twinkleWhileIdleBootThresholdLevel)? true: false;
+  twinkleWhileIdle = (average > twinkleWhileIdleBootThresholdLevel)? true: twinkleWhileIdle;
 
   // Initialize all pixels to 'green' as a signal that boot is complete
-  // set all color values to 0 to remove this flash at startup
-  for(uint16_t l = 0; l < strip.numPixels(); l++) {
-    redStates[l]   = 0;
-    greenStates[l] = 100;
-    blueStates[l]  = 0;
-    timestamps[l]  = millis();
+  // note: to remove this "flash" at startup, set all color values to 0
+  for(uint8_t px = 0; px < pixels.numPixels(); px++) {
+    twinkle_init(px, 0, 100, 0);
   }
 
 }
@@ -98,9 +102,7 @@ void loop() {
   uint16_t minLvl, maxLvl;
   int n, height;
 
-  twinkle_tick();                    // adjust all NeoPixels to their new brightness
- 
-  n = getMicReading();
+  n = getMicReading();               // normalized mic reading (removing noise)
   storeSample(n);                    // store this sound level sample, to take averages later
   lvl = levelMicReading(n);          // "Dampened" reading (else looks twitchy)
 
@@ -108,31 +110,33 @@ void loop() {
   height = calcBarHeight(minLvlAvg, maxLvlAvg);
 
   if(height == 0){
-    // twinkle on idle
-    if(twinkleWhileIdle==true && random(twinkleRate) == 1) {
-      int num_pixels_to_twinkle = random(1, N_PIXELS);
-      for(uint8_t px = 0; px < num_pixels_to_twinkle; px++){
-        int lockMillis = fadeMillis;
-        twinkle_start(px, lockMillis); // twinkle in random color, and don't overwrite this twinkle before its completely done.
-      }
+    // twinkle a random pixel, when idle (sound level is too low to light up pixels).
+    if(twinkleWhileIdle==true && random(twinkleRate) == 1){
+      twinkle_init(random(1, N_PIXELS)); // twinkle in random color, and don't overwrite this twinkle before its completely done.
     }
-  }else{    
-    // light up the pixels
-    // set same random color for all pixels
+  }else{
+    // not idle, current mic level dictates pixels to be lit up.
+    // set new color for the pixels, use same random color for all pixels, for this event
     int r = random(255);
     int g = random(255);
     int b = random(255);
-    for(uint8_t px=0; px<N_PIXELS; px++) {
-      if(px < height){
-        twinkle_start(px, r, g, b, fadeLockMillis);
+    for(uint8_t px=0; px <= height; px++) {
+      // only twinkle this pixel, if it is not still locked by a previous twinkle
+      long twinkleEnd = timestamps[px] + fadeLockMillis;
+      if( millis() > twinkleEnd ){ 
+        twinkle_init(px, r, g, b);
       }
     }
   }
+
   // update the pixels
-  strip.show(); // Update strip
+  twinkle_tick();  // adjust all NeoPixels color settings to their new brightness
+  pixels.show();    // send the new pixel settings to the string of NeoPixels
+
 
   // Get volume range of prior frames
-  // these min and max levels will be used in the next cycle, to dynamicaly adjust the threshold to the current average sound level.
+  // these min and max levels will be used in the next cycle,
+  // to dynamicaly adjust the threshold to the current average sound level.
   minLvl = maxLvl = vol[0];
   for(int s=1; s<SAMPLES; s++) {
     if(vol[s] < minLvl)      minLvl = vol[s];
@@ -176,58 +180,81 @@ void storeSample(int n){
   if(++volCount >= SAMPLES) volCount = 0; // Advance/rollover sample counter
 }
 
-void twinkle_start(uint16_t pixel){
-  twinkle_start(pixel, random(256), random(256), random(256));
+void twinkle_init(uint16_t pixel){
+  twinkle_init(pixel, random(256), random(256), random(256));
 }
-void twinkle_start(uint16_t pixel, int lockMillis){
-  twinkle_start(pixel, random(256), random(256), random(256), lockMillis);
-}
-void twinkle_start(uint16_t pixel, int r, int g, int b, int lockMillis){
-  // dont overwrite the neopixel if it is still in its locked fading stage
-  if(timestamps[pixel] + lockMillis < millis() ) {
-    twinkle_start(pixel, r, g, b);
-  }
-}
-void twinkle_start(uint16_t pixel, int r, int g, int b){
+
+void twinkle_init(uint16_t pixel, int r, int g, int b){
+  redOriginal[pixel]   = r;
+  greenOriginal[pixel] = g;
+  blueOriginal[pixel]  = b;
   redStates[pixel] = r;
   greenStates[pixel] = g;
   blueStates[pixel] = b;
-  timestamps[pixel] = millis(); // reset the timestamp for this pixel
+  timestamps[pixel] = millis(); // set the start timestamp for this pixel
 }
 
 
-
+/*
+* Heartbeat method for twinkle effect
+* This method should be called every loop cycle.
+* It updates the LED color states, taking the fade duration setting into account,
+* and the time that has passed since the previous cycle.
+*/
 void twinkle_tick(){
-    long now = millis();
-  
-    for(uint16_t l = 0; l < N_PIXELS; l++) {
-      if (redStates[l] > 1 || greenStates[l] > 1 || blueStates[l] > 1) {
-        strip.setPixelColor(l, redStates[l], greenStates[l], blueStates[l]);
+    unsigned long now = millis();
 
-        long diff =  now - timestamps[l];
-        float fraction = diff/fadeMillis;
-        float fadeRate = 1-fraction;
+    for(uint16_t px = 0; px < N_PIXELS; px++) {
+      if (redStates[px] > 1 || greenStates[px] > 1 || blueStates[px] > 1) {
+        // set this pixel to the color that is stored in the color arrays
+        pixels.setPixelColor(px, redStates[px], greenStates[px], blueStates[px]);
+
+        // TODO: bugfix:
+        // for some unclear reason, the timestamp is sometimes (much) greater than 'now', causing problematic values for diff, fraction and rate.
+        // this quick fix makes sure the timestamp is alwasy in the past:
+        if(timestamps[px] > now ){
+          timestamps[px] = now - 222; // timestamp in array is corrupted, set to arbitrary time in the past
+        }
+        long diff = now - timestamps[px]; // time since pixel color was initiated
+        float fraction = diff/fadeMillis; // fraction of the fade period that has passed
+        float fadeRate = 1-fraction;      // rate at which to fade this pixel in this cycle (tick)
         
-        if (redStates[l] > 1) {
-          redStates[l] = redStates[l] * fadeRate;
-        } else {
-          redStates[l] = 0;
+        // in case the fadeRate has an invalid value (due to corrupted values)
+        // set the rate to a valid value
+        if (fadeRate>=1){
+          fadeRate = 0.5;
         }
         
-        if (greenStates[l] > 1) {
-          greenStates[l] = greenStates[l] * fadeRate;
-        } else {
-          greenStates[l] = 0;
-        }
-        
-        if (blueStates[l] > 1) {
-          blueStates[l] = blueStates[l] * fadeRate;
-        } else {
-          blueStates[l] = 0;
-        }
+        // fade the pixel       
+        redStates[px]   = twinkleFade(redOriginal[px],   redStates[px],   fadeRate);
+        greenStates[px] = twinkleFade(greenOriginal[px], greenStates[px], fadeRate);
+        blueStates[px]  = twinkleFade(blueOriginal[px],  blueStates[px],  fadeRate);
+
+//        // Debug code
+//        Serial.print("px=");Serial.print(px);Serial.print("; ");
+//        Serial.print("");Serial.print(redStates[px]);Serial.print("");
+//        Serial.print("");Serial.print(greenStates[px]);Serial.print("");
+//        Serial.print("");Serial.print(blueStates[px]);Serial.print("; ");
+//        Serial.print("");Serial.print(now);Serial.print("-");
+//        Serial.print("");Serial.print(timestamp);Serial.print("=");
+//        Serial.print("");Serial.print(diff);Serial.print("; ");
+//        Serial.print("fraction=");Serial.print(fraction);Serial.print("; ");
+//        Serial.print("rate=");Serial.print(fadeRate);Serial.print("; ");
+//        Serial.println(";");
         
       } else {
-        strip.setPixelColor(l, 0, 0, 0);
+        // turn pixel off
+        pixels.setPixelColor(px, 0, 0, 0);
       }
+      
     }
 }
+
+int twinkleFade(int originalColor, int currentColor, float fadeRate){
+  int newColor = 0;
+  if (currentColor > 1) {
+    newColor = originalColor * fadeRate;
+  }
+  return newColor;
+}
+
