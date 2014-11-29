@@ -65,6 +65,10 @@ float blueOriginal[N_PIXELS];   //
 float greenOriginal[N_PIXELS];  //
 unsigned long timestamps[N_PIXELS]; // this array keeps track of the start time of a twinkle fade for each pixel
 
+int num_pix_to_light = 0;
+int timestamp_next_pix_to_light = 0;
+int next_pix_to_light = -1;
+int r,g,b;
 
 Adafruit_TCS34725 tcs = Adafruit_TCS34725(TCS34725_INTEGRATIONTIME_50MS, TCS34725_GAIN_4X);
 
@@ -121,18 +125,47 @@ void loop() {
 
   // Calculate bar height based on dynamic min/max levels (fixed point)
   height = calcBarHeight(minLvlAvg, maxLvlAvg);
+  
+  //TODO: debug set to 0
+  height = 0;
 
   if(height == 0){
     // twinkle a random pixel, when idle (sound level is too low to light up pixels).
-    if(twinkleWhileIdle==true && random(twinkleRate) == 1){
-      twinkle_init(random(1, N_PIXELS)); // twinkle in random color, and don't overwrite this twinkle before its completely done.
-    }
+//    if(twinkleWhileIdle==true && random(twinkleRate) == 1){
+      if(random(500) == 1){
+        r = random(255);
+        g = random(5);
+        b = random(5);
+        num_pix_to_light = random(0, N_PIXELS);
+        next_pix_to_light = 0;
+        timestamp_next_pix_to_light = abs(millis() + 200);
+      }
+
+
+      Serial.print("millis=");Serial.print(millis());Serial.print("; ");
+      Serial.print("num=");Serial.print(num_pix_to_light);Serial.print("; ");
+      Serial.print("pix=");Serial.print(next_pix_to_light);Serial.print("; ");
+      Serial.print("timestamp=");Serial.print(timestamp_next_pix_to_light);Serial.print("; ");
+      Serial.println(";");      
+
+      if(num_pix_to_light > -1 && timestamp_next_pix_to_light < millis()){
+        twinkle_init(next_pix_to_light, r, g, b); // twinkle in random color, and don't overwrite this twinkle before its completely done.
+        if(next_pix_to_light <= num_pix_to_light){
+          next_pix_to_light = next_pix_to_light + 1;
+        }else{
+          num_pix_to_light = 0;
+          timestamp_next_pix_to_light = 0;
+          next_pix_to_light = -1;
+        }
+        delay(1000);
+      }
+//    }
   }else{
     // not idle, current mic level dictates pixels to be lit up.
     // set new color for the pixels, use same random color for all pixels, for this event
     int r = random(255);
-    int g = random(255);
-    int b = random(255);
+    int g = random(5);
+    int b = random(5);
     for(uint8_t px=0; px <= height; px++) {
       // only twinkle this pixel, if it is not still locked by a previous twinkle
       long twinkleEnd = timestamps[px] + fadeLockMillis;
@@ -164,6 +197,7 @@ void loop() {
   if((maxLvl - minLvl) < N_PIXELS) maxLvl = minLvl + N_PIXELS;
   minLvlAvg = (minLvlAvg * 63 + minLvl) >> 6; // Dampen min/max levels
   maxLvlAvg = (maxLvlAvg * 63 + maxLvl) >> 6; // (fake rolling average)
+
 
 }
 
