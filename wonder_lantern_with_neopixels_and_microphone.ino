@@ -27,8 +27,6 @@ Rewritten by Eriestuff, to add twinkle effect.
 This paragraph must be included in any redistribution.
 */
 
-#include <Wire.h>
-#include "Adafruit_TCS34725.h"
 #include <Adafruit_NeoPixel.h>
 
 #define N_PIXELS   4  // Number of pixels in strand
@@ -70,8 +68,6 @@ int timestamp_next_pix_to_light = 0;
 int next_pix_to_light = -1;
 int r,g,b;
 
-Adafruit_TCS34725 tcs = Adafruit_TCS34725(TCS34725_INTEGRATIONTIME_50MS, TCS34725_GAIN_4X);
-
 
 void setup() {
   Serial.begin(9600);
@@ -80,13 +76,6 @@ void setup() {
   // line.  Audio samples are 'cleaner' ats 3.3V.
   // COMMENT OUT THIS LINE FOR 3.3V ARDUINOS (FLORA, ETC.):
   // analogReference(EXTERNAL);
-
-  if (tcs.begin()) {
-    tcs.setInterrupt(true);  // turn off LED
-    Serial.println("Found sensor");
-  } else {
-    Serial.println("No TCS34725 found ... check your connections");
-  }
 
 
   memset(vol, 0, sizeof(vol));
