@@ -28,12 +28,15 @@ This paragraph must be included in any redistribution.
 */
 
 #include <Adafruit_NeoPixel.h>
+#include <HSBColor.h>
 
 #define N_PIXELS   4  // Number of pixels in strand
 #define LED_PIN    6  // NeoPixel LED strand is connected to this pin
 
 // Twinkle settings 
-float   fadeMillis       =  500; // duration of twinkle fade
+float   fadeMillisMin      =  300; // duration of twinkle fade
+float   fadeMillisMax      =  500; // duration of twinkle fade
+float   fadeMillis         =  random(fadeMillisMin, fadeMillisMax); // initialize with random value, will be changed in Loop()
 //int     fadeLockMillis   =  200; // withing this amount of millis, started twinkles will not be overwritten by new twinkles
 //int     twinkleRate      = 7500; // random twinkle will happen once every this many millis (when in twinkle_while_idle mode), so higher values yield twinkles LESS often
 
@@ -47,7 +50,7 @@ float blueOriginal[N_PIXELS];   //
 float greenOriginal[N_PIXELS];  //
 unsigned long timestamps[N_PIXELS]; // this array keeps track of the start time of a twinkle fade for each pixel
 
-unsigned long loop_until;
+unsigned long loop_until;       // has to be unsigned long to be able to deal with integer overflow
 
 
 
@@ -79,9 +82,11 @@ void setup() {
 }
 
 void loop() {
-
-  if( (long)( millis() - loop_until ) >= 0){
-    loop_until = millis() + random(100, 1000);
+  if( (long)( millis() - loop_until ) >= 0){ // this is the correct way to compare timestamps that might suffer integer overflows.
+    fadeMillis = random(fadeMillisMin, fadeMillisMax); // don't make each fade evenly long
+    int shortestInterval = 100;           // shortest interval between throwing new flames
+    int longestInterval = fadeMillis+100; // longest interval, a bit longer than the fade time, so the (first) pixel is never off for longer than 100ms
+    loop_until = millis() + random(shortestInterval, longestInterval); // throw next flame somewhere between shortest and longest interval
     throw_flame();
   }
  
@@ -93,24 +98,30 @@ void loop() {
 }
 
 void throw_flame(){
-  int flame_height = random(2,N_PIXELS+1);
-  for(int i=0;i<flame_height;i++){
-    int inv_i = constrain(flame_height - i,0,N_PIXELS);
-    int r = random(200,255);
-    int g = constrain(random((inv_i*55),100),0,r); // constrain to maximum of r value
-    int b = random(0,0);
-    flame_pixel_init(i,r,g,b);
+  int flame_height = random(random(0,2),N_PIXELS);
+  int flame_hue = random(45,60); // yellowish
+  int flame_brightness = map(flame_height, 0, N_PIXELS, 0,100); // 0-100
+ 
+  for(int px=0;px<=flame_height;px++){
+    int hue = flame_hue - ((60-20)/N_PIXELS * px); // 0-360
+    int sat = 100;   // 0-100
+    int rgb[3]; // array of colors that will be set by the H2R function call
+    int px_brightness = flame_brightness-(px*10);
+    H2R_HSBtoRGB(hue, sat, px_brightness, rgb);
+    flame_pixel_init(px,rgb[0],rgb[1],rgb[2], flame_brightness);
   }
 }
 
-void flame_pixel_init(uint16_t pixel, int r, int g, int b){
+void flame_pixel_init(uint16_t pixel, int r, int g, int b, int bright){
   redOriginal[pixel]   = r;
   greenOriginal[pixel] = g;
   blueOriginal[pixel]  = b;
   redStates[pixel] = r;
   greenStates[pixel] = g;
   blueStates[pixel] = b;
-  timestamps[pixel] = millis() + (random(50,150)*pixel); // set the start timestamp for this pixel
+  int inv_bright = 100-bright; // inverse brighness, needed for calculation of flame speed
+  int flame_slowness = inv_bright*pixel*2;
+  timestamps[pixel] = millis() + flame_slowness; // set the start timestamp for this pixel (shorter is 'faster' flame)
 }
 
 void flame_tick(){
